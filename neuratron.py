@@ -1,36 +1,64 @@
-import numpy as np
-import time
-
-class Model:
-    def __init__(self, shape:tuple=(100,100), lr:float=0.001):
-        self.shape = shape
-        self.lr = lr
-
-        self.total = np.random.rand(*shape)
-        self.total_bias = np.sum(self.total, axis=0)
-
-        self.using_weight = self.total
-        self.using_bias = self.total_bias
-
-    def feed_forward(self, X, output_shape:int):
-        self.X = X
-        input_shape = X.shape[1]
-
-        self.using_weight = self.total[:input_shape, :output_shape]
-        self.using_bias = self.total_bias[:output_shape]
-        self.output = np.dot(X, self.using_weight) + self.using_bias
-
-        return self.output
-
-    def backward_pass(self, Y):
-        grad = 2 * np.mean((Y-self.output).reshape(-1,1), axis=0)
-        self.using_bias += grad * self.lr  
-
-        X_refited = np.array([np.sum(self.X, axis=0)])
-        grad = np.dot(X_refited.T, grad)
-        grad = np.clip(grad, -10, 10)
+import torch
+import torch.nn as nn
+import torch.optim as optim
         
-        self.using_weight -= np.dot(self.using_weight.T, grad) * self.lr
+class Neuratron(nn.Module):
+    def __init__(self, shape:tuple):
+        super().__init__(self)
+        self.alloc_mtrx = nn.Linear(*shape)
+        self.alloc_mtrx.requires_grad = False
+        self.alloc_map = {}
+        self.not_allocated = [] 
 
-        self.total[:self.using_weight.shape[0], :self.using_weight.shape[1]] = self.using_weight
-        self.total_bias[:self.using_bias.shape[0]] = self.using_bias
+    def allocate_memory(self, shape:tuple, rotule:str):
+        allocated = None
+        if not any(self.alloc_map):
+            allocated = self.alloc_mtrx[:shape[0], :shape[1]]
+            self.not_allocated.append(self.allocated[shape[0]:, :shape[1]])
+            self.not_allocated.append(self.allocated[:shape[0], shape[1]:])
+            self.not_allocated.append(self.allocated[shape[0]:, shape[1]:])
+
+        else:
+            for i, alloc in enumerate(self.not_allocated):
+                if not(shape[0] > alloc.shape[0] or shape[1] > alloc.shape[1]):
+                    allocated = alloc[:shape[0], :shape[1]]
+                    self.not_allocated.pop(i)
+                    self.not_allocated.append(alloc[shape[0]:, :shape[1]])
+                    self.not_allocated.append(alloc[:shape[0], shape[1]:])
+                    self.not_allocated.append(alloc[shape[0]: shape[1]:])
+
+                    break
+
+        allocated.requires_grad = False
+        self.alloc_map[rotule] = allocated
+
+    def forward(self, X:np.ndarray, rotule:str):
+        self.X = torch.from_numpy(X)
+        if rotule not in self.alloc_map:
+            self.allocate_memory(*X.shape, rotule)
+
+        return self.alloc_map[rotule](self.X)
+
+    def backward(self, rotule:str, out:np.ndarray=None, Y:np.ndarray=None, grad=None):
+        if grad is None and out and Y:
+            self.alloc_map[rotule].requires_grad = True
+
+            loss = (2/n) * (out - Y)
+            loss.backward()
+
+            self.alloc_map[rotule].weight -= self.lr * self.alloc_map[rotule].weight.grad
+            self.alloc_map[rotule].bias -= self.lr * self.alloc_map[rotule].bias.grad
+            self.alloc_map[rotule].requires_grad = False
+
+            return self.X.grad
+
+        elif grad:
+            self.alloc_map[rotule].requires_grad = True
+            self.alloc_map[rotule].backward(gradient=grad)
+
+            self.alloc_map[rotule].weight -= self.lr * self.alloc_map[rotule].weight.grad
+            self.alloc_map[rotule].bias -= self.lr * self.alloc_map[rotule].bias.grad
+
+            self.alloc_map[rotule].requires_grad = False
+            return self.X.grad
+            
